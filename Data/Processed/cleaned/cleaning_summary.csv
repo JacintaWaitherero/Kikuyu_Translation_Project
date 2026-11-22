@@ -1,0 +1,9 @@
+﻿Category,Original_Rows,Incomplete_Rows_Removed,Duplicate_Rows_Removed,Cleaned_Rows
+avocado,365,1,0,364
+banana,452,1,1,450
+cabbage,466,0,2,464
+coffee,420,0,1,419
+dairy,462,0,0,462
+mango,642,0,0,642
+potato,510,2,3,505
+poultry,539,0,1,538

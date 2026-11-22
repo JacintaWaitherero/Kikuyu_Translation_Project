@@ -1,0 +1,8 @@
+torch
+transformers
+sentencepiece
+accelerate
+pandas
+scikit-learn
+sacrebleu
+openpyxl
