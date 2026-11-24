@@ -1,7 +1,10 @@
 """Fine-tune NLLB-200 (distilled 600M) for Kikuyu -> English.
-Put this file in the src/ folder and run from the project root:
+Save as src/finetune.py and run from the project root:
     python src/finetune.py
 """
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"   # use ONE GPU (avoids multi-GPU errors)
+
 import json
 import torch
 import pandas as pd
@@ -11,30 +14,36 @@ from transformers import (AutoTokenizer, AutoModelForSeq2SeqLM,
                           Seq2SeqTrainingArguments, Seq2SeqTrainer,
                           DataCollatorForSeq2Seq)
 
+SMOKE = False          # True = tiny test run, False = real run
 MODEL = "facebook/nllb-200-distilled-600M"
 SRC, TGT = "kik_Latn", "eng_Latn"
 SPLITS = "Data/Processed/splits"
 OUT = "models/nllb-kikuyu-en"
+EPOCHS = 1 if SMOKE else 5
 device = "cuda" if torch.cuda.is_available() else "cpu"
+print("Using device:", device)
 
 tok = AutoTokenizer.from_pretrained(MODEL, src_lang=SRC, tgt_lang=TGT)
 model = AutoModelForSeq2SeqLM.from_pretrained(MODEL)
 
 
 def load(name):
-    return pd.read_csv(f"{SPLITS}/{name}.csv", encoding="utf-8-sig")
+    df = pd.read_csv(f"{SPLITS}/{name}.csv", encoding="utf-8-sig")
+    df = df.dropna(subset=["Kikuyu", "English"])
+    df["Kikuyu"] = df["Kikuyu"].astype(str).str.strip()
+    df["English"] = df["English"].astype(str).str.strip()
+    df = df[(df["Kikuyu"] != "") & (df["English"] != "")]
+    return df.reset_index(drop=True)
 
 
 train_df, val_df, test_df = load("train"), load("validation"), load("test")
-
-##BEGIN TESTING
-SMOKE = True   # set to False for the real run
 if SMOKE:
     train_df, val_df, test_df = train_df.head(16), val_df.head(8), test_df.head(8)
-##END TESTING
+print(f"Train={len(train_df)}  Val={len(val_df)}  Test={len(test_df)}")
+
 
 def to_ds(df):
-    return Dataset.from_pandas(df[["Kikuyu", "English"]].astype(str))
+    return Dataset.from_pandas(df[["Kikuyu", "English"]])
 
 
 def prep(batch):
@@ -61,8 +70,8 @@ def translate(m, sentences, bs=16):
 
 
 def score(m, df, label):
-    preds = translate(m, df["Kikuyu"].astype(str).tolist())
-    refs = [df["English"].astype(str).tolist()]
+    preds = translate(m, df["Kikuyu"].tolist())
+    refs = [df["English"].tolist()]
     bleu = sacrebleu.corpus_bleu(preds, refs).score
     chrf = sacrebleu.corpus_chrf(preds, refs).score
     print(f"{label}: BLEU={bleu:.2f}  chrF={chrf:.2f}")
@@ -74,17 +83,16 @@ base_preds, b_bleu, b_chrf = score(model, test_df, "BEFORE")
 
 # 2) Fine-tune
 args = Seq2SeqTrainingArguments(
-    output_dir=OUT,
+    output_dir="checkpoints",
     learning_rate=2e-5,
     per_device_train_batch_size=8,
     per_device_eval_batch_size=8,
-    num_train_epochs=1 if SMOKE else 3,
+    num_train_epochs=EPOCHS,
     weight_decay=0.01,
     eval_strategy="epoch",
-    save_strategy="epoch",
-    save_total_limit=1,
-    load_best_model_at_end=True,
+    save_strategy="no",            # no big checkpoints; we save the final model below
     fp16=torch.cuda.is_available(),
+    logging_steps=50,
     report_to="none",
 )
 trainer = Seq2SeqTrainer(
@@ -93,8 +101,12 @@ trainer = Seq2SeqTrainer(
     data_collator=DataCollatorForSeq2Seq(tok, model=model),
 )
 trainer.train()
-trainer.save_model(OUT)
+
+# Save the model right away
+os.makedirs(OUT, exist_ok=True)
+trainer.model.save_pretrained(OUT)
 tok.save_pretrained(OUT)
+print("Model saved to", OUT)
 
 # 3) AFTER fine-tuning
 ft_preds, a_bleu, a_chrf = score(trainer.model, test_df, "AFTER ")
@@ -108,7 +120,7 @@ with open("evaluation_scores.json", "w") as f:
     json.dump({"before": {"bleu": b_bleu, "chrf": b_chrf},
                "after": {"bleu": a_bleu, "chrf": a_chrf}}, f, indent=2)
 
-# Per-category scores (shows it works across crops)
+# Per-category scores
 for cat, g in res.groupby("Category"):
     s = sacrebleu.corpus_bleu(g["Fine_tuned"].tolist(), [g["English"].tolist()]).score
     print(f"  {cat}: BLEU={s:.2f}")
