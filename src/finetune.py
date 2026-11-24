@@ -27,6 +27,11 @@ def load(name):
 
 train_df, val_df, test_df = load("train"), load("validation"), load("test")
 
+##BEGIN TESTING
+SMOKE = True   # set to False for the real run
+if SMOKE:
+    train_df, val_df, test_df = train_df.head(16), val_df.head(8), test_df.head(8)
+##END TESTING
 
 def to_ds(df):
     return Dataset.from_pandas(df[["Kikuyu", "English"]].astype(str))
@@ -73,7 +78,7 @@ args = Seq2SeqTrainingArguments(
     learning_rate=2e-5,
     per_device_train_batch_size=8,
     per_device_eval_batch_size=8,
-    num_train_epochs=3,
+    num_train_epochs=1 if SMOKE else 3,
     weight_decay=0.01,
     eval_strategy="epoch",
     save_strategy="epoch",
